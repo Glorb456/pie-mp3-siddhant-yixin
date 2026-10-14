@@ -1,0 +1,149 @@
+#include <Wire.h>
+#include <Adafruit_MotorShield.h>
+
+// Create the motor shield object with default I2C address
+Adafruit_MotorShield AFMS = Adafruit_MotorShield(); 
+
+// Set Motor Ports
+Adafruit_DCMotor *RMotor = AFMS.getMotor(1);
+Adafruit_DCMotor *LMotor = AFMS.getMotor(2);
+
+const int micPin = A0;       // Right microphone sensor
+const int micPin2 = A1;      // Left microphone sensor
+const int sampleWindow = 50; // Sample window width in ms
+
+unsigned int sample;
+unsigned int sample2;
+
+// Non blocking timer vars
+unsigned long StartTime = 0;
+const unsigned long duration = 1000; 
+bool ActionBool = false;
+
+void setup() {
+
+  // Initiates Serial Output and checks for motor shield
+  Serial.begin(9600);           
+  Serial.println("Adafruit Motor Shield V2 - Sound Avoidance & Freeze Robot");
+
+  if (!AFMS.begin()) { 
+    Serial.println("Could not find Motor Shield. Check wiring.");
+    while (1);
+  }
+  Serial.println("Motor Shield found.");
+
+  // ensures motors are off at start
+  RMotor->setSpeed(250);
+  RMotor->run(RELEASE);
+  LMotor->setSpeed(250);
+  LMotor->run(RELEASE);
+}
+
+void loop() {
+  // maintains fleeing direction with a non blocking timer
+  if (ActionBool) {
+    if (millis() - StartTime >= duration) {
+      ActionBool = false; 
+    } else {
+      return; 
+    }
+  }
+
+  // noise level vars
+  unsigned long startMillis = millis(); 
+  unsigned int peakToPeak = 0;   
+  unsigned int peakToPeak2 = 0;
+  unsigned int signalMax = 0;
+  unsigned int signalMax2 = 0;
+  unsigned int signalMin = 1024;
+  unsigned int signalMin2 = 1024;
+
+  // Sampling loop
+  while (millis() - startMillis < sampleWindow) { // by redefining the variables each time, we are able to remove any constant noise like motor noise by redefining the min amplitude to that level
+    sample = analogRead(micPin);
+    sample2 = analogRead(micPin2);
+
+    if (sample < 1024) {   // ensures noise is within sensor range
+      if (sample > signalMax) {
+        signalMax = sample;  
+      } else if (sample < signalMin) {
+        signalMin = sample;  
+      }
+    }
+
+    if (sample2 < 1024) {   
+      if (sample2 > signalMax2) {
+        signalMax2 = sample2; 
+      } else if (sample2 < signalMin2) {
+        signalMin2 = sample2;  
+      }
+    }
+  }
+
+  
+
+  // calculating amplitude
+  peakToPeak = signalMax - signalMin;  
+  peakToPeak2 = signalMax2 - signalMin2;
+  double volts = (peakToPeak * 3.3) / 1024.0; 
+  double volts2 = (peakToPeak2 * 3.3) / 1024.0; 
+
+  // debugging
+  Serial.println();
+  Serial.print("Right: ");
+  Serial.println(volts);
+  Serial.print("Left: ");
+  Serial.println(volts2);
+  Serial.println();
+
+  // motor logic
+  // First threshold/loudest sound, if senses, runs away
+  if (volts > 1.75 || volts2 > 1.75) {
+    if (volts2 > volts) {
+      // Sound greater on left, run right
+      LMotor->setSpeed(200);
+      RMotor->setSpeed(200);
+      LMotor->run(BACKWARD);
+      RMotor->run(BACKWARD);
+      delay(400);
+      LMotor->setSpeed(125);
+      RMotor->setSpeed(125);
+      LMotor->run(BACKWARD);
+      RMotor->run(FORWARD);
+      delay(800);
+      Serial.println("Running right");
+    } else {
+      // Soundis greater on right, run left
+      RMotor->setSpeed(200);
+      LMotor->setSpeed(200);
+      RMotor->run(FORWARD);
+      LMotor->run(FORWARD);
+      delay(400);
+      LMotor->setSpeed(125);
+      RMotor->setSpeed(125);
+      LMotor->run(BACKWARD);
+      RMotor->run(FORWARD);
+      delay(800);
+      Serial.println("Running Left");
+    }
+
+    StartTime = millis();
+    ActionBool = true;
+  }
+  // Second threshold, medium sound, if senses, freezes
+  else if (volts > .75 || volts2 > .75) {
+    RMotor->run(RELEASE);
+    LMotor->run(RELEASE);
+    Serial.println("Freezing");
+    StartTime = millis();
+    ActionBool = true;
+  }
+  // steady state, drive in circle
+  else {
+    LMotor->setSpeed(125);
+    RMotor->setSpeed(125);
+    LMotor->run(BACKWARD);
+    RMotor->run(FORWARD);
+    Serial.println("Moving");
+  }
+}
